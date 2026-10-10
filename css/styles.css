@@ -1,0 +1,31 @@
+/* =====================================================================
+   css/styles.css - كل الـ CSS الخاص بالموقع (التصميم نفسه بيستخدم Tailwind)
+   ===================================================================== */
+
+html, body { height: 100%; }
+
+body {
+    margin: 0;
+    padding: 0;
+    background-color: #f8fafc;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+}
+
+#root {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+
+
+/* RTL (Arabic) */
+[dir="rtl"] .border-r { border-right-width: 0; border-left-width: 1px; }
+[dir="rtl"] .text-left { text-align: right; }
+[dir="rtl"] .ml-auto { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .file\:mr-2::file-selector-button { margin-right: 0; margin-left: .5rem; }
