@@ -3,7 +3,7 @@
    القائمة الجانبية (الميزات الأربعة). لإضافة ميزة جديدة ضيف زرار هنا.
    ===================================================================== */
 
-function Sidebar({ page, setPage, bugsCount, runsCount, onOpenCloud, onOpenAgent, cloudProject, cloudStory, cloudStatus, cloudUser, onOpenSettings, gapsCount, scenariosCount, casesCount, summaryBadge }) {
+function Sidebar({ page, setPage, bugsCount, runsCount, onOpenCloud, onOpenAgent, cloudProject, cloudStory, cloudStatus, cloudUser, onOpenSettings, gapsCount, scenariosCount, casesCount, summaryBadge, cloudSyncInfo, onRetrySync }) {
     return (
         <aside className="w-64 bg-white border-r border-slate-200 p-4 flex flex-col justify-between">
                         <div>
@@ -106,7 +106,8 @@ function Sidebar({ page, setPage, bugsCount, runsCount, onOpenCloud, onOpenAgent
                             <span className="flex-1">Account</span>
                             {cloudProject
                                 ? (cloudStatus === 'saving' ? <span className="text-[10px] font-bold text-amber-600">⏳</span>
-                                    : cloudStatus === 'queued' || cloudStatus === 'offline' ? <span className="text-[10px] font-bold text-amber-600" title="Changes are queued on this device until the connection returns">◷</span>
+                                    : cloudStatus === 'queued' ? <span className="text-[10px] font-bold text-amber-600" title={tr('Pending changes are stored in this browser and will sync when the connection returns')}>◷</span>
+                                    : cloudStatus === 'offline' ? <span className="text-[10px] font-bold text-amber-600" title={tr('Offline. New changes will be queued for sync when the connection returns.')}>◷</span>
                                     : cloudStatus === 'conflict' ? <span className="text-[10px] font-bold text-orange-600" title="Cloud changes conflict with local edits. Reload the story before continuing.">↔</span>
                                     : cloudStatus === 'error' ? <span className="text-[10px] font-bold text-red-600" title="Cloud sync or live updates failed">⚠</span>
                                     : <span className="text-[10px] font-bold text-emerald-700" title="Cloud changes synchronized">✔</span>)
@@ -120,12 +121,39 @@ function Sidebar({ page, setPage, bugsCount, runsCount, onOpenCloud, onOpenAgent
                             <span className="flex-1">Vetly Agent</span>
                             {cloudProject
                                 ? (cloudStatus === 'saving' ? <span className="text-[10px] font-bold text-amber-600">⏳</span>
-                                    : cloudStatus === 'queued' || cloudStatus === 'offline' ? <span className="text-[10px] font-bold text-amber-600" title="Changes are queued on this device until the connection returns">◷</span>
+                                    : cloudStatus === 'queued' ? <span className="text-[10px] font-bold text-amber-600" title={tr('Pending changes are stored in this browser and will sync when the connection returns')}>◷</span>
+                                    : cloudStatus === 'offline' ? <span className="text-[10px] font-bold text-amber-600" title={tr('Offline. New changes will be queued for sync when the connection returns.')}>◷</span>
                                     : cloudStatus === 'conflict' ? <span className="text-[10px] font-bold text-orange-600" title="Cloud changes conflict with local edits. Reload the story before continuing.">↔</span>
                                     : cloudStatus === 'error' ? <span className="text-[10px] font-bold text-red-600" title="Cloud sync or live updates failed">⚠</span>
                                     : <span className="text-[10px] font-bold text-emerald-700" title="Cloud changes synchronized">✔</span>)
                                 : null}
                         </button>
+                        {cloudUser && cloudProject && cloudStory && (
+                            <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600">
+                                <div className="font-semibold">
+                                    {cloudStatus === 'saving' ? tr('Saving changes...') :
+                                        cloudStatus === 'saved' ? tr('All changes saved') :
+                                            cloudStatus === 'queued' || cloudStatus === 'offline'
+                                                ? (navigator.onLine === false ? tr('Pending changes') : tr('Saving changes...')) :
+                                                cloudStatus === 'conflict' ? tr('Cloud conflict needs attention') :
+                                                    cloudStatus === 'error' ? tr('Sync needs attention') : tr('Sync status')}
+                                </div>
+                                {navigator.onLine === false && cloudSyncInfo && cloudSyncInfo.pendingCount > 0 && (
+                                    <div className="mt-1">{tr('Pending snapshots')}: {cloudSyncInfo.pendingCount}</div>
+                                )}
+                                {cloudSyncInfo && cloudSyncInfo.lastSavedAt && (
+                                    <div className="mt-1">{tr('Last saved')}: {new Date(cloudSyncInfo.lastSavedAt).toLocaleTimeString()}</div>
+                                )}
+                                {cloudSyncInfo && cloudSyncInfo.error && (
+                                    <div className="mt-1 break-words text-red-600">{tr(cloudSyncInfo.error)}</div>
+                                )}
+                                {(cloudStatus === 'error' || cloudStatus === 'queued' || cloudStatus === 'offline') && (
+                                    <div className="mt-2 flex gap-2">
+                                        <button onClick={onRetrySync} className="rounded border border-slate-300 bg-white px-2 py-1 font-semibold hover:bg-slate-100">{tr('Retry sync')}</button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                         <button
                             onClick={onOpenSettings}
                             className="w-full flex items-center gap-2 p-2 mb-2 rounded-lg font-medium text-xs text-left bg-white border border-slate-200 text-slate-600 hover:bg-slate-100"

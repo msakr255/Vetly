@@ -50,9 +50,9 @@ function ShareModal({ onClose, project, stories, cloudProject }) {
         // لو المشروع المشارَك هو المفتوح: نحفظ نسخة طازة الأول (فوق الحفظ التلقائي)
         if (cloudProject && cloudProject.id === project.id) {
             const saveResult = await sbSaveSnapshot(project.id);
-            if (saveResult.error || saveResult.pending) {
+            if (saveResult.error) {
                 setBusy(false);
-                setMsg(saveResult.error ? saveResult.error.message : 'اتصال الإنترنت غير متاح؛ استنى المزامنة قبل إنشاء رابط المشاركة.');
+                setMsg(saveResult.error.message);
                 return;
             }
         }

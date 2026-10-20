@@ -74,6 +74,7 @@ function computeProjectDetail(pay) {
 
 function ProjectsPage({ cloudProject, setCloudProject, cloudStory, setCloudStory, resetFeatureStates }) {
     const [rows, setRows] = useState(null);   // إحصائيات كل المشاريع + قصص كل مشروع (Dashboard)
+    const projectsLoadVersion = React.useRef(0);
     const [sel, setSel] = useState(null);      // تفاصيل مشروع مختار { id, name, d }
     const [newName, setNewName] = useState('');
     const [newStoryName, setNewStoryName] = useState('');
@@ -86,7 +87,17 @@ function ProjectsPage({ cloudProject, setCloudProject, cloudStory, setCloudStory
     const [summaryData, setSummaryData] = useState(null);
     const [summaryLoading, setSummaryLoading] = useState(false);
     // إعادة تحميل بتسجّل إن المحتوى المحمّل بلغة الموقع الحالية (عشان كاش الترجمة ميتلخبطش)
-    const finishSwitch = () => { if (typeof markAllContentLang === 'function') markAllContentLang(getLang()); if (typeof resetFeatureStates === 'function') resetFeatureStates(); };
+    const finishSwitch = () => {
+        const project = sbGetOpenProject();
+        const story = sbGetOpenStory();
+        window._sbReadyKey = null;
+        sbSwitchLock(!!(project && project.id && story && story.id));
+        if (project && project.id && story && story.id) {
+            window.dispatchEvent(new Event('vetly_cloud_loading'));
+        }
+        if (typeof markAllContentLang === 'function') markAllContentLang(getLang());
+        if (typeof resetFeatureStates === 'function') resetFeatureStates();
+    };
 
     // ---------- ملخص المشروع: نفس صفحة Summary Report بالظبط لكن بيجمع كل اليوزر ستوريز ----------
     const openProjectSummary = async (proj) => {
@@ -133,29 +144,69 @@ function ProjectsPage({ cloudProject, setCloudProject, cloudStory, setCloudStory
         });
     };
 
-    const load = async () => {
-        setRows(null); setMsg('');
-        const r = await sbListProjects();
-        if (r.error) { setMsg(r.error.message); return; }
-        const c = sbClient();
-        const { data: snaps, error } = await c.from('project_snapshots').select('project_id, payload, updated_at');
-        if (error) { setMsg(error.message); return; }
-        const byProj = {};
-        (snaps || []).forEach(s => { byProj[s.project_id] = s; });
-        setRows((r.data || []).map(p => {
-            const s = byProj[p.id];
-            const payN = sbNormalizePayload(s && s.payload);
-            const d = computeProjectDetail(payN);
-            const stories = payN.stories.map(st => ({
-                id: st.id, name: st.name,
-                hasData: !!(st.data && Object.keys(st.data).length),
-                updated: st.updated
-            }));
-            return { id: p.id, name: p.name, savedAt: s ? s.updated_at : null, d, stories };
-        }));
+    const load = async ({ silent = false } = {}) => {
+        const requestVersion = ++projectsLoadVersion.current;
+        if (!silent) setMsg('');
+        try {
+            const r = await sbListProjects();
+            if (requestVersion !== projectsLoadVersion.current) return;
+            if (r.error) {
+                setRows(previous => previous === null ? [] : previous);
+                setMsg(r.error.message);
+                return;
+            }
+            const c = sbClient();
+            const { data: snaps, error } = await c.from('project_snapshots').select('project_id, payload, updated_at');
+            if (requestVersion !== projectsLoadVersion.current) return;
+            if (error) {
+                setRows(previous => previous === null ? [] : previous);
+                setMsg(error.message);
+                return;
+            }
+            const byProj = {};
+            (snaps || []).forEach(s => { byProj[s.project_id] = s; });
+            const projectRows = (r.data || []).map(p => {
+                const s = byProj[p.id];
+                const payN = sbNormalizePayload(s && s.payload);
+                const d = computeProjectDetail(payN);
+                const stories = payN.stories.map(st => ({
+                    id: st.id, name: st.name,
+                    hasData: !!(st.data && Object.keys(st.data).length),
+                    updated: st.updated
+                }));
+                return { id: p.id, name: p.name, savedAt: s ? s.updated_at : null, d, stories };
+            });
+            setRows(previous => JSON.stringify(previous) === JSON.stringify(projectRows) ? previous : projectRows);
+            setMsg('');
+        } catch (error) {
+            if (requestVersion !== projectsLoadVersion.current) return;
+            setRows(previous => previous === null ? [] : previous);
+            setMsg(error.message || String(error));
+        }
     };
 
-    useEffect(() => { load(); }, []);
+    useEffect(() => {
+        load();
+        let refreshTimer = null;
+        const refreshProjects = () => {
+            if (document.visibilityState === 'hidden') return;
+            if (refreshTimer) clearTimeout(refreshTimer);
+            refreshTimer = setTimeout(() => load({ silent: true }), 120);
+        };
+        const onProjectsChanged = () => load({ silent: true });
+        const stopWatchingProjects = sbWatchProjects(onProjectsChanged);
+        window.addEventListener('vetly_projects_refresh', onProjectsChanged);
+        window.addEventListener('focus', refreshProjects);
+        document.addEventListener('visibilitychange', refreshProjects);
+        return () => {
+            if (refreshTimer) clearTimeout(refreshTimer);
+            projectsLoadVersion.current++;
+            stopWatchingProjects();
+            window.removeEventListener('vetly_projects_refresh', onProjectsChanged);
+            window.removeEventListener('focus', refreshProjects);
+            document.removeEventListener('visibilitychange', refreshProjects);
+        };
+    }, []);
 
     // حفظ المشروع المفتوح حاليًا قبل أي تبديل (ضمانة فوق الحفظ التلقائي)
     const saveCurrent = async () => {
@@ -166,8 +217,8 @@ function ProjectsPage({ cloudProject, setCloudProject, cloudStory, setCloudStory
         const latest = await sbLoadSnapshot(cloudProject.id);
         if (latest.error) return latest;
         const story = latest.data.payload.stories.find(item => item.id === cloudStory.id);
-        sbWorkspaceReplace(story && story.data ? story.data : {});
-        localStorage.removeItem(sbPendingSnapshotKey(cloudProject.id, cloudStory.id));
+        if (!story) return { error: { message: 'The active story was not found in the latest cloud snapshot; local changes were preserved.' } };
+        sbWorkspaceReplace(story.data || {});
         return { error: null };
     };
 
@@ -367,17 +418,17 @@ function ProjectsPage({ cloudProject, setCloudProject, cloudStory, setCloudStory
     }
 
     return (
-        <main className="flex-1 flex flex-col overflow-hidden">
-            <div className="p-4 bg-white border-b border-slate-200 flex justify-between items-center shadow-sm">
-                <div className="flex items-center gap-3">
-                    <h2 className="text-lg font-bold text-slate-800">My Projects</h2>
-                    {cloudProject && <span className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2.5 py-1 font-semibold">📁 Open: {cloudProject.name}</span>}
+        <main className="w-full min-w-0 flex-1 flex flex-col overflow-hidden">
+            <div className="w-full shrink-0 box-border p-4 bg-white border-b border-slate-200 flex flex-wrap justify-between items-center gap-3 shadow-sm">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                    <h2 className="shrink-0 text-lg font-bold text-slate-800">My Projects</h2>
+                    {cloudProject && <span className="min-w-0 max-w-full truncate text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2.5 py-1 font-semibold">📁 Open: {cloudProject.name}</span>}
                 </div>
                 {/* الإنشاء هنا في الهيدر بعيد عن محتوى الصفحة اللي بيسكرول */}
-                <div className="flex gap-2 items-center">
-                    <input className="border border-slate-300 rounded p-2 text-sm bg-white w-56" value={newName} onChange={e => setNewName(e.target.value)} placeholder="New project name..." />
+                <div className="flex w-full flex-wrap justify-end gap-2 items-center sm:w-auto sm:flex-nowrap sm:shrink-0">
+                    <input className="w-full sm:w-56 min-w-0 border border-slate-300 rounded p-2 text-sm bg-white" value={newName} onChange={e => setNewName(e.target.value)} placeholder="New project name..." />
                     <button onClick={doCreate} disabled={busy} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 whitespace-nowrap">+ Create</button>
-                    <button onClick={load} disabled={busy} className="bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-300">
+                    <button onClick={() => load({ silent: true })} disabled={busy} className="bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-300">
                         ↻ Refresh
                     </button>
                 </div>

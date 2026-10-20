@@ -694,41 +694,46 @@ async function sbDeleteProject(id) {
 // ---------- Snapshot: كل بيانات الشغل المحلية في jsonb واحد ----------
 // مفاتيح تتفضل محلية على الجهاز (سرية): مفاتيح الـ API والموديلات
 function sbWorkspaceDump() {
-    const skip = { wakil_keys: 1, wakil_models: 1, wakil_cloud_project: 1, wakil_last_page: 1 };
-    const dump = {};
-    for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        // مفاتيح اختيار الموديل (wakil_model_*) وحالة المزوّدين الواقفين (wakil_provider_down_*)
-        // وتعريفات المزوّدات المخصصة (wakil_custom_providers) — كلها تفضيلات جهاز زي مفاتيح الـ API
-        if (k && k.startsWith('wakil_') && !skip[k] && !k.startsWith('wakil_model_') && !k.startsWith('wakil_provider_down_') && !k.startsWith('wakil_auto_') && k !== 'wakil_custom_providers' && k !== 'wakil_cloud_story') dump[k] = localStorage.getItem(k);
-    }
-    return dump;
+    return Object.assign({}, window._wkMem);
 }
 
 function sbWorkspaceApply(dump) {
     Object.keys(dump || {}).forEach(k => {
-        if (k === 'wakil_keys' || k === 'wakil_models' || k === 'wakil_cloud_project') return;
-        try { localStorage.setItem(k, dump[k]); } catch (e) { /* quota */ }
+        if (wkIsDataKey(k)) window._wkMem[k] = String(dump[k]);
     });
 }
 
 function sbWorkspaceReplace(dump) {
-    Object.keys(sbWorkspaceDump()).forEach(k => localStorage.removeItem(k));
+    sbWorkspaceClear();
     sbWorkspaceApply(dump);
-    window._sbLastSyncedFingerprint = _sbFingerprint();
+    sbWorkspaceMarkReady();
     window.dispatchEvent(new Event('vetly_feature_data_changed'));
 }
 
 // تفريغ الشغل المحلي بالكامل (كل الميزات تفضى) — بيستخدم عند التبديل بين المشاريع
 // عشان كل مشروع يبقى عالم منفصل. مفاتيح الجهاز فقط (مفاتيح API + الثيم + اللغة) بتتفضل.
 function sbWorkspaceClear() {
-    const keep = { wakil_keys: 1, wakil_models: 1, wakil_cloud_project: 1, wakil_cloud_story: 1, wakil_last_page: 1 };
-    const toRemove = [];
-    for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith('wakil_') && !keep[k] && !k.startsWith('wakil_model_') && !k.startsWith('wakil_provider_down_') && !k.startsWith('wakil_auto_') && k !== 'wakil_custom_providers' && k !== 'wakil_cloud_story') toRemove.push(k);
-    }
-    toRemove.forEach(k => localStorage.removeItem(k));
+    Object.keys(window._wkMem).forEach(k => delete window._wkMem[k]);
+    window._sbReadyKey = null;
+}
+
+function sbWorkspaceMarkReady() {
+    const project = sbGetOpenProject();
+    const story = sbGetOpenStory();
+    window._sbReadyKey = project && story ? project.id + ':' + story.id : null;
+    window._sbConflict = false;
+    window._sbLastSyncedFingerprint = _sbFingerprint();
+}
+
+function sbIsDirty() {
+    return !!window._sbReadyKey && _sbFingerprint() !== window._sbLastSyncedFingerprint;
+}
+
+function sbIsOwnVersion(projectId, version) {
+    if (!version) return false;
+    const time = Date.parse(version);
+    return [sbSnapshotVersion(projectId), window._sbInFlight && window._sbInFlight[projectId]]
+        .some(item => item && Date.parse(item) === time);
 }
 
 // ---------- Snapshot v2: قصص المستخدم (User Stories) جوه المشروع ----------
@@ -763,144 +768,215 @@ function sbNextSnapshotVersion(remoteVersion) {
     return new Date(nextMillis).toISOString();
 }
 
-function sbPendingSnapshotKey(projectId, storyId) {
-    return 'vetly_pending_snapshot:' + projectId + ':' + storyId;
+function sbOfflineQueueId(userId, projectId, storyId) {
+    return [userId, projectId, storyId].join(':');
 }
 
-function sbQueueSnapshot(projectId, storyOpen, data, baseVersion) {
-    const pending = {
+function sbOfflineQueueDb() {
+    if (window._sbOfflineQueueDbPromise) return window._sbOfflineQueueDbPromise;
+    if (!window.indexedDB) return Promise.reject(new Error('IndexedDB is unavailable; offline changes cannot be stored safely.'));
+    window._sbOfflineQueueDbPromise = new Promise((resolve, reject) => {
+        const request = window.indexedDB.open('vetly-offline-sync', 1);
+        request.onupgradeneeded = () => {
+            if (!request.result.objectStoreNames.contains('snapshots')) {
+                request.result.createObjectStore('snapshots', { keyPath: 'id' });
+            }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('Failed to open offline sync storage.'));
+        request.onblocked = () => reject(new Error('Offline sync storage upgrade is blocked by another open tab.'));
+    }).catch(error => {
+        window._sbOfflineQueueDbPromise = null;
+        throw error;
+    });
+    return window._sbOfflineQueueDbPromise;
+}
+
+async function sbGetQueuedSnapshot(userId, projectId, storyId) {
+    await (window._sbQueueMutationChain || Promise.resolve());
+    const db = await sbOfflineQueueDb();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction('snapshots', 'readonly');
+        const request = transaction.objectStore('snapshots').get(sbOfflineQueueId(userId, projectId, storyId));
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error || new Error('Failed to read pending offline changes.'));
+        transaction.onabort = () => reject(transaction.error || new Error('Failed to read pending offline changes.'));
+    });
+}
+
+async function sbGetQueuedSnapshots(userId) {
+    await (window._sbQueueMutationChain || Promise.resolve());
+    const db = await sbOfflineQueueDb();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction('snapshots', 'readonly');
+        const request = transaction.objectStore('snapshots').getAll();
+        request.onsuccess = () => resolve((request.result || []).filter(record => record.userId === userId));
+        request.onerror = () => reject(request.error || new Error('Failed to list pending offline changes.'));
+        transaction.onabort = () => reject(transaction.error || new Error('Failed to list pending offline changes.'));
+    });
+}
+
+async function sbGetQueuedSnapshotCount(userId, projectId, storyId) {
+    const records = await sbGetQueuedSnapshots(userId);
+    return records.filter(record =>
+        (!projectId || record.projectId === projectId) &&
+        (!storyId || record.storyId === storyId)
+    ).length;
+}
+
+async function sbStoreQueuedSnapshot(record) {
+    const db = await sbOfflineQueueDb();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction('snapshots', 'readwrite');
+        transaction.objectStore('snapshots').put(record);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error || new Error('Failed to save pending offline changes.'));
+        transaction.onabort = () => reject(transaction.error || new Error('Failed to save pending offline changes.'));
+    });
+}
+
+function sbSerializeQueueMutation(operation) {
+    const previous = window._sbQueueMutationChain || Promise.resolve();
+    const next = previous.then(operation);
+    window._sbQueueMutationChain = next.catch(() => {});
+    return next;
+}
+
+async function sbQueueSnapshotData(userId, projectId, storyId, data, baseVersion, legacyConflict) {
+    const copy = Object.assign({}, data || {});
+    const record = {
+        id: sbOfflineQueueId(userId, projectId, storyId),
+        userId,
         projectId,
-        storyId: storyOpen.id,
-        storyName: storyOpen.name || 'Story',
-        data: data || sbWorkspaceDump(),
-        baseVersion: baseVersion === undefined ? sbSnapshotVersion(projectId) : baseVersion,
-        queuedAt: new Date().toISOString()
+        storyId,
+        data: copy,
+        fingerprint: _sbFingerprint(copy),
+        baseVersion: baseVersion || null,
+        legacyConflict: !!legacyConflict,
+        updatedAt: Date.now()
     };
-    try {
-        localStorage.setItem(sbPendingSnapshotKey(projectId, storyOpen.id), JSON.stringify(pending));
-        return { error: null, pending: true, snapshot: pending };
-    } catch (e) {
-        return { error: { message: 'Could not queue offline changes in this browser: ' + e.message } };
-    }
+    await sbSerializeQueueMutation(() => sbStoreQueuedSnapshot(record));
+    return record;
 }
 
-async function sbSaveSnapshot(projectId, queuedSnapshot) {
+async function sbRemoveQueuedSnapshot(userId, projectId, storyId, fingerprint) {
+    return sbSerializeQueueMutation(async () => {
+        const db = await sbOfflineQueueDb();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction('snapshots', 'readwrite');
+            const store = transaction.objectStore('snapshots');
+            const request = store.get(sbOfflineQueueId(userId, projectId, storyId));
+            request.onsuccess = () => {
+                const record = request.result;
+                if (record && (!fingerprint || record.fingerprint === fingerprint)) store.delete(record.id);
+            };
+            request.onerror = () => reject(request.error || new Error('Failed to inspect pending offline changes.'));
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () => reject(transaction.error || new Error('Failed to clear pending offline changes.'));
+            transaction.onabort = () => reject(transaction.error || new Error('Failed to clear pending offline changes.'));
+        });
+    });
+}
+
+async function sbRemoveQueuedProjectSnapshots(userId, projectId) {
+    return sbSerializeQueueMutation(async () => {
+        const db = await sbOfflineQueueDb();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction('snapshots', 'readwrite');
+            const store = transaction.objectStore('snapshots');
+            const request = store.getAll();
+            request.onsuccess = () => {
+                (request.result || []).forEach(record => {
+                    if (record.userId === userId && record.projectId === projectId) store.delete(record.id);
+                });
+            };
+            request.onerror = () => reject(request.error || new Error('Failed to inspect pending project changes.'));
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () => reject(transaction.error || new Error('Failed to clear pending project changes.'));
+            transaction.onabort = () => reject(transaction.error || new Error('Failed to clear pending project changes.'));
+        });
+    });
+}
+
+async function sbPersistPendingSnapshot() {
+    const readyKey = window._sbReadyKey;
+    if (!readyKey || !sbIsDirty()) return false;
+    const project = sbGetOpenProject();
+    const story = sbGetOpenStory();
+    if (!project || !project.id || !story || !story.id || readyKey !== project.id + ':' + story.id) return false;
+    const user = await sbGetSessionUser();
+    if (!user) return false;
+    const data = sbWorkspaceDump();
+    await sbQueueSnapshotData(user.id, project.id, story.id, data, sbSnapshotVersion(project.id));
+    return true;
+}
+
+async function sbSaveSnapshot(projectId) {
     const c = sbClient();
     if (!c) return { error: { message: 'Supabase not configured' } };
     const user = await sbGetSessionUser();
     if (!user) return { error: { message: 'Not signed in' } };
-    const storyOpen = queuedSnapshot
-        ? { id: queuedSnapshot.storyId, name: queuedSnapshot.storyName }
-        : sbGetOpenStory();
+    const storyOpen = sbGetOpenStory();
     if (!storyOpen || !storyOpen.id) return { error: null };
-    if (!queuedSnapshot) {
-        let baseVersion = sbSnapshotVersion(projectId);
-        const key = sbPendingSnapshotKey(projectId, storyOpen.id);
-        try {
-            const previousPending = JSON.parse(localStorage.getItem(key) || 'null');
-            if (previousPending && previousPending.projectId === projectId && previousPending.storyId === storyOpen.id) {
-                baseVersion = previousPending.baseVersion;
-            }
-        } catch (e) {
-            return { error: { message: 'Could not read the pending offline changes: ' + e.message } };
-        }
-        const queued = sbQueueSnapshot(projectId, storyOpen, sbWorkspaceDump(), baseVersion);
-        if (queued.error) return queued;
-        queuedSnapshot = queued.snapshot;
-    }
-    const savedFingerprint = _sbFingerprint(queuedSnapshot.data);
-    if (navigator.onLine === false) {
-        return { error: null, pending: true, savedFingerprint };
-    }
+    const dump = sbWorkspaceDump();
+    const fingerprint = _sbFingerprint(dump);
     let snapshotResult;
     try {
         snapshotResult = await c.from('project_snapshots')
             .select('payload, updated_at').eq('project_id', projectId).maybeSingle();
     } catch (e) {
-        if (/fetch|network|offline|load failed/i.test(String(e.message || '')) || navigator.onLine === false) {
-            return { error: null, pending: true, savedFingerprint };
-        }
         return { error: e };
     }
     const { data, error: readError } = snapshotResult;
-    if (readError) {
-        if (/fetch|network|offline|load failed/i.test(String(readError.message || ''))) {
-            return { error: null, pending: true, savedFingerprint };
-        }
-        return { error: readError };
-    }
-    const expectedVersion = queuedSnapshot ? queuedSnapshot.baseVersion : sbSnapshotVersion(projectId);
-    const remoteVersion = data && data.updated_at || null;
-    if ((expectedVersion && remoteVersion !== expectedVersion) || (!expectedVersion && remoteVersion)) {
-        return { error: { message: 'Cloud data changed in another browser. Reload the story before saving to avoid overwriting newer changes.', conflict: true } };
-    }
-    if (expectedVersion && !remoteVersion) {
-        return { error: { message: 'The cloud snapshot was removed in another session. Reload the project before saving.', conflict: true } };
+    if (readError) return { error: readError };
+    const expected = sbSnapshotVersion(projectId);
+    const remote = (data && data.updated_at) || null;
+    if (expected !== remote) {
+        return { error: { message: 'Cloud data changed in another browser. Reload the story before saving.', conflict: true } };
     }
     const pay = sbNormalizePayload(data && data.payload);
-    let story = pay.stories.find(s => s.id === storyOpen.id);
+    let story = pay.stories.find(item => item.id === storyOpen.id);
     if (!story) {
         story = { id: storyOpen.id, name: storyOpen.name || 'Story', data: {} };
         pay.stories.push(story);
     }
     if (storyOpen.name) story.name = storyOpen.name;
-    story.data = queuedSnapshot.data;
+    story.data = dump;
     story.updated = new Date().toISOString();
     pay.activeStory = story.id;
-    const updatedAt = sbNextSnapshotVersion(remoteVersion);
-    if (!window._sbInFlightSnapshotVersions) window._sbInFlightSnapshotVersions = {};
-    window._sbInFlightSnapshotVersions[projectId] = updatedAt;
-    const clearInFlightVersion = () => {
-        if (window._sbInFlightSnapshotVersions[projectId] === updatedAt) {
-            delete window._sbInFlightSnapshotVersions[projectId];
-        }
-    };
+    const updatedAt = sbNextSnapshotVersion(remote);
+    window._sbInFlight = window._sbInFlight || {};
+    window._sbInFlight[projectId] = updatedAt;
     let writeResult;
     try {
-        if (remoteVersion) {
-            writeResult = await c.from('project_snapshots')
+        writeResult = remote
+            ? await c.from('project_snapshots')
                 .update({ owner: user.id, payload: pay, updated_at: updatedAt })
-                .eq('project_id', projectId).eq('updated_at', remoteVersion)
-                .select('updated_at').maybeSingle();
-            if (!writeResult.error && !writeResult.data) {
-                clearInFlightVersion();
-                return { error: { message: 'Cloud data changed while saving. Reload the story to avoid overwriting newer changes.', conflict: true } };
-            }
-        } else {
-            writeResult = await c.from('project_snapshots').insert({
+                .eq('project_id', projectId).eq('updated_at', remote)
+                .select('updated_at').maybeSingle()
+            : await c.from('project_snapshots').insert({
                 project_id: projectId, owner: user.id, payload: pay, updated_at: updatedAt
             }).select('updated_at').maybeSingle();
-        }
     } catch (e) {
-        clearInFlightVersion();
-        if (/fetch|network|offline|load failed/i.test(String(e.message || '')) || navigator.onLine === false) {
-            return { error: null, pending: true, savedFingerprint };
-        }
+        delete window._sbInFlight[projectId];
         return { error: e };
     }
-    clearInFlightVersion();
-    if (writeResult.error) {
-        if (/fetch|network|offline|load failed/i.test(String(writeResult.error.message || ''))) {
-            return { error: null, pending: true, savedFingerprint };
-        }
-        return { error: writeResult.error };
+    delete window._sbInFlight[projectId];
+    if (writeResult.error) return { error: writeResult.error };
+    if (remote && !writeResult.data) {
+        return { error: { message: 'Cloud data changed while saving. Reload the story.', conflict: true } };
     }
-    sbSetSnapshotVersion(projectId, writeResult.data && writeResult.data.updated_at || updatedAt);
-    const openProject = sbGetOpenProject();
-    const openStory = sbGetOpenStory();
-    if (openProject && openProject.id === projectId && openStory && openStory.id === storyOpen.id &&
-        _sbFingerprint() === savedFingerprint) {
-        window._sbLastSyncedFingerprint = savedFingerprint;
-    }
-    if (queuedSnapshot) {
-        const key = sbPendingSnapshotKey(projectId, storyOpen.id);
+    sbSetSnapshotVersion(projectId, (writeResult.data && writeResult.data.updated_at) || updatedAt);
+    if (_sbFingerprint() === fingerprint) {
+        window._sbLastSyncedFingerprint = fingerprint;
         try {
-            const current = JSON.parse(localStorage.getItem(key) || 'null');
-            if (current && current.queuedAt === queuedSnapshot.queuedAt) localStorage.removeItem(key);
-        } catch (e) { localStorage.removeItem(key); }
+            await sbRemoveQueuedSnapshot(user.id, projectId, storyOpen.id);
+        } catch (e) {
+            console.error('Cloud snapshot saved, but pending offline data could not be cleared:', e);
+        }
     }
     sbRefreshProjectShares(projectId, pay);
-    return { error: null, pending: false, savedFingerprint };
+    return { error: null };
 }
 
 async function sbLoadSnapshot(projectId) {
@@ -981,15 +1057,14 @@ function sbGetOpenStory() {
 }
 
 // هل فيه شغل حقيقي محفوظ محليًا على الجهاز ده؟ (لتجنب رفع حالة فاضية على مشروع في السحابة)
-function sbWorkspaceHasContent() {
-    const dump = sbWorkspaceDump();
+function sbWorkspaceHasContent(dump) {
+    dump = dump || sbWorkspaceDump();
     const meaningful = (v) => {
         if (v == null) return false;
         const s = String(v).trim();
         return !!s && s !== 'null' && s !== '[]' && s !== '{}';
     };
-    return ['wakil_ai_data', 'wakil_runs', 'wakil_bugs', 'wakil_gap_data', 'wakil_sc_data', 'wakil_story', 'wakil_gap_text', 'wakil_sc_story']
-        .some(k => meaningful(dump[k]));
+    return Object.values(dump).some(meaningful);
 }
 
 // بصمة الشغل الحالي: أي تغيير في أي مفتاح wakil_ بيغيرها
@@ -998,145 +1073,147 @@ function _sbFingerprint(dump) {
     return JSON.stringify(Object.keys(dump).sort().map(k => [k, dump[k]]));
 }
 
-async function sbFlushPendingSnapshots() {
-    if (navigator.onLine === false) return { error: null, pending: true };
-    if (window._sbFlushingPending) return window._sbFlushingPending;
-    window._sbFlushingPending = (async () => {
-        const pending = [];
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (!key || key.indexOf('vetly_pending_snapshot:') !== 0) continue;
-            try {
-                const item = JSON.parse(localStorage.getItem(key) || 'null');
-                if (!item || !item.projectId || !item.storyId) {
-                    return { error: { message: 'An offline change could not be read. Its local queue entry needs attention: ' + key } };
-                }
-                pending.push(item);
-            } catch (e) {
-                console.error('Invalid queued Supabase snapshot:', e);
-                return { error: { message: 'An offline change could not be read. Its local queue entry is invalid: ' + key } };
-            }
-        }
-        for (let i = 0; i < pending.length; i++) {
-            const item = pending[i];
-            const result = await sbSaveSnapshot(item.projectId, item);
-            if (result.error || result.pending) return result;
-            const version = sbSnapshotVersion(item.projectId);
-            for (let j = i + 1; j < pending.length; j++) {
-                const next = pending[j];
-                if (next.projectId !== item.projectId) continue;
-                next.baseVersion = version;
-                try {
-                    localStorage.setItem(sbPendingSnapshotKey(next.projectId, next.storyId), JSON.stringify(next));
-                } catch (e) {
-                    return { error: { message: 'Could not update the offline queue: ' + e.message } };
-                }
-            }
-        }
-        return { error: null, pending: false, flushed: pending.length > 0 };
-    })();
-    try {
-        return await window._sbFlushingPending;
-    } finally {
-        window._sbFlushingPending = null;
-    }
+function sbCompareWorkspaceSnapshots(localData, cloudData) {
+    const local = localData || {};
+    const cloud = cloudData || {};
+    const keys = [...new Set([...Object.keys(local), ...Object.keys(cloud)])].sort();
+    return keys.reduce((rows, key) => {
+        const hasLocal = Object.prototype.hasOwnProperty.call(local, key);
+        const hasCloud = Object.prototype.hasOwnProperty.call(cloud, key);
+        const localValue = hasLocal ? String(local[key]) : null;
+        const cloudValue = hasCloud ? String(cloud[key]) : null;
+        if (localValue === cloudValue && hasLocal === hasCloud) return rows;
+        const preview = value => {
+            if (value == null) return '(missing)';
+            const text = value.length > 180 ? value.slice(0, 180) + '…' : value;
+            return text || '(empty)';
+        };
+        rows.push({
+            key,
+            local: preview(localValue),
+            cloud: preview(cloudValue),
+            change: !hasCloud ? 'local-only' : !hasLocal ? 'cloud-only' : 'changed'
+        });
+        return rows;
+    }, []);
 }
 
 function sbStartAutoSave(onStatus) {
     if (!sbClient() || window._sbAutoSaveStarted) return;
     window._sbAutoSaveStarted = true;
-    let lastFp = _sbFingerprint();
     let busy = false;
     let timer = null;
-    const flush = async () => {
-        if (busy || window._sbSwitching) return;
-        const fp = _sbFingerprint();
-        if (window._sbLastSyncedFingerprint === fp) {
-            lastFp = fp;
-            return;
-        }
-        if (fp === lastFp) return;
-        const project = sbGetOpenProject();
-        if (!project || !project.id) return;
-        const story = sbGetOpenStory();
-        if (!story || !story.id) return; // مفيش قصة مفتوحة ⇒ مفيش حفظ (منع القصص الشبح)
-        busy = true;
-        try {
-            const user = await sbGetSessionUser();
-            if (!user) {
-                lastFp = fp;
-                return;
-            }
-            if (onStatus) onStatus('saving');
-            const result = await sbSaveSnapshot(project.id);
-            if (result.pending) {
-                lastFp = result.savedFingerprint || fp;
-                if (onStatus) onStatus('queued');
-            } else if (!result.error) {
-                lastFp = result.savedFingerprint || fp;
-                if (onStatus) onStatus('saved');
-            } else {
-                lastFp = fp;
-                if (onStatus) onStatus(result.error.conflict ? 'conflict' : 'error');
-            }
-        } catch (e) {
-            const result = persistPendingWorkspace();
-            if (result && result.error) {
-                lastFp = fp;
-                if (onStatus) onStatus('error');
-            } else {
-                lastFp = _sbFingerprint();
-                if (onStatus) onStatus('queued');
-            }
-            console.error('Supabase autosave failed:', e);
-        } finally {
-            busy = false;
-        }
-    };
+    let retryAt = 0;
+    const say = (status, details) => { if (onStatus) onStatus(status, details); };
+
     const schedule = () => {
+        if (navigator.onLine === false && sbIsDirty()) {
+            sbPersistPendingSnapshot().then(stored => {
+                if (stored) {
+                    const project = sbGetOpenProject();
+                    const story = sbGetOpenStory();
+                    sbGetSessionUser().then(user => user && project && story
+                        ? sbGetQueuedSnapshotCount(user.id, project.id, story.id) : 0)
+                        .then(count => {
+                            if (navigator.onLine === false) say('queued', { pendingCount: count });
+                        })
+                        .catch(error => {
+                            say('error', { error: error.message });
+                            console.error('Failed to count pending offline changes:', error);
+                        });
+                }
+            }).catch(error => {
+                say('error', { error: error.message });
+                console.error('Failed to preserve pending offline changes:', error);
+            });
+        }
         if (timer) clearTimeout(timer);
-        timer = setTimeout(flush, 800);
+        timer = setTimeout(flush, Math.max(800, retryAt - Date.now()));
     };
-    const persistPendingWorkspace = () => {
-        if (window._sbSwitching) return;
+    window._sbSchedule = schedule;
+
+    async function flush() {
+        timer = null;
+        if (busy || window._sbSwitching || window._sbConflict || !sbIsDirty()) return;
         const project = sbGetOpenProject();
         const story = sbGetOpenStory();
         if (!project || !project.id || !story || !story.id) return;
-        const fp = _sbFingerprint();
-        if (fp === lastFp || fp === window._sbLastSyncedFingerprint) return;
-        let baseVersion = sbSnapshotVersion(project.id);
-        const inFlightVersion = window._sbInFlightSnapshotVersions && window._sbInFlightSnapshotVersions[project.id];
-        if (inFlightVersion) baseVersion = inFlightVersion;
-        try {
-            const previous = JSON.parse(localStorage.getItem(sbPendingSnapshotKey(project.id, story.id)) || 'null');
-            if (!inFlightVersion && previous && previous.projectId === project.id && previous.storyId === story.id) {
-                baseVersion = previous.baseVersion;
+        if (window._sbReadyKey !== project.id + ':' + story.id) return;
+        if (navigator.onLine === false) {
+            try {
+                await sbPersistPendingSnapshot();
+                const user = await sbGetSessionUser();
+                const pendingCount = user ? await sbGetQueuedSnapshotCount(user.id, project.id, story.id) : 0;
+                say('queued', { pendingCount });
+            } catch (error) {
+                say('error', { error: error.message || String(error) });
+                console.error('Failed to preserve offline changes:', error);
             }
-        } catch (e) {
-            console.error('Could not read the pending workspace before page exit:', e);
-        }
-        const result = sbQueueSnapshot(project.id, story, sbWorkspaceDump(), baseVersion);
-        if (result.error) console.error('Could not preserve workspace changes before page exit:', result.error);
-    };
-    window.addEventListener('pagehide', persistPendingWorkspace);
-    setInterval(() => {
-        if (_sbFingerprint() !== lastFp) schedule();
-    }, 300);
-    window.addEventListener('online', async () => {
-        if (onStatus) onStatus('saving');
-        const result = await sbFlushPendingSnapshots();
-        if (result.error) {
-            if (onStatus) onStatus(result.error.conflict ? 'conflict' : 'error');
             return;
         }
-        if (result.flushed) {
-            lastFp = window._sbLastSyncedFingerprint || '';
-            schedule();
-        } else if (onStatus) onStatus(result.pending ? 'queued' : 'saved');
+        busy = true;
+        try {
+            if (!(await sbGetSessionUser())) {
+                retryAt = Date.now() + 5000;
+                return;
+            }
+            say('saving');
+            const result = await sbSaveSnapshot(project.id);
+            if (result.error) {
+                if (result.error.conflict) {
+                    window._sbConflict = true;
+                    say('conflict');
+                } else {
+                    retryAt = Date.now() + 5000;
+                    say('error', { error: result.error.message || String(result.error) });
+                    console.error('Supabase save failed:', result.error);
+                }
+            } else {
+                retryAt = 0;
+                if (sbIsDirty()) say('saving');
+                else {
+                    const user = await sbGetSessionUser();
+                    const pendingCount = user ? await sbGetQueuedSnapshotCount(user.id, project.id, story.id) : 0;
+                    say(pendingCount && navigator.onLine === false ? 'queued' : 'saved', {
+                        lastSavedAt: Date.now(),
+                        pendingCount: navigator.onLine === false ? pendingCount : 0,
+                        error: ''
+                    });
+                }
+            }
+        } catch (e) {
+            retryAt = Date.now() + 5000;
+            say('error', { error: e.message || String(e) });
+            console.error('Supabase save failed:', e);
+        } finally {
+            busy = false;
+            if (sbIsDirty() && !window._sbConflict) schedule();
+        }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden' && sbIsDirty()) {
+            if (timer) clearTimeout(timer);
+            flush();
+        }
     });
+    window.addEventListener('beforeunload', event => {
+        if (sbIsDirty() || (!window._sbReadyKey && sbWorkspaceHasContent())) {
+            event.preventDefault();
+            event.returnValue = '';
+        }
+    });
+    window.addEventListener('online', schedule);
     window.addEventListener('offline', () => {
-        if (onStatus) onStatus('offline');
+        if (sbIsDirty()) schedule();
+        else say('offline');
     });
+    window._sbRetrySync = () => {
+        retryAt = 0;
+        if (window._sbReadyKey) window._sbLastSyncedFingerprint = null;
+        schedule();
+        return true;
+    };
 }
 
 function sbWatchSnapshot(projectId, onChange, onStatus) {
@@ -1158,5 +1235,26 @@ function sbWatchSnapshot(projectId, onChange, onStatus) {
     return () => {
         try { c.removeChannel(channel); }
         catch (e) { console.error('Failed to close snapshot subscription:', e); }
+    };
+}
+
+function sbWatchProjects(onChange, onStatus) {
+    const c = sbClient();
+    if (!c || typeof onChange !== 'function') return () => {};
+    const channel = c.channel('projects-list')
+        .on('postgres_changes', {
+            event: '*',
+            schema: 'public',
+            table: 'projects'
+        }, payload => onChange(payload))
+        .subscribe((status, error) => {
+            if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                console.error('Supabase project-list subscription failed:', error || status);
+                if (onStatus) onStatus('error');
+            }
+        });
+    return () => {
+        try { c.removeChannel(channel); }
+        catch (error) { console.error('Failed to close project-list subscription:', error); }
     };
 }

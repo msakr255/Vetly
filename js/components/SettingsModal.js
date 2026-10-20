@@ -154,6 +154,7 @@ function SettingsModal({ open, onClose, keys, setKeys, models, setModels }) {
     const exportBackup = () => {
         setBackupNote('');
         const dump = {};
+        Object.assign(dump, sbWorkspaceDump());
         for (let i = 0; i < localStorage.length; i++) {
             const k = localStorage.key(i);
             if (k && (k.startsWith('wakil_') || k.startsWith('vetly_'))) dump[k] = localStorage.getItem(k);
@@ -169,12 +170,45 @@ function SettingsModal({ open, onClose, keys, setKeys, models, setModels }) {
             const j = JSON.parse(await file.text());
             if (!j || typeof j.data !== 'object' || !j.data) throw new Error(tr('Invalid backup file'));
             if (!window.confirm(tr('Restoring will replace ALL current data (including keys) with this backup. Continue?'))) return;
+
+            const workspace = {};
             Object.keys(j.data).forEach(k => {
                 if (!(k.startsWith('wakil_') || k.startsWith('vetly_'))) return;
-                try { localStorage.setItem(k, j.data[k]); } catch (e) { /* skip */ }
+                if (wkIsDataKey(k)) workspace[k] = String(j.data[k]);
             });
-            setBackupNote(tr('Restored ✔ The page will reload...'));
-            setTimeout(() => location.reload(), 800);
+            const importedProject = j.data.wakil_cloud_project ? JSON.parse(j.data.wakil_cloud_project) : null;
+            const importedStory = j.data.wakil_cloud_story ? JSON.parse(j.data.wakil_cloud_story) : null;
+            const currentProject = sbGetOpenProject();
+            const currentStory = sbGetOpenStory();
+            const selectionChanges = !currentProject || !currentStory ||
+                currentProject.id !== (importedProject && importedProject.id) ||
+                currentStory.id !== (importedStory && importedStory.id);
+            if (importedProject && importedProject.id && importedStory && importedStory.id) {
+                const snapshot = await sbLoadSnapshot(importedProject.id);
+                if (snapshot.error) throw snapshot.error;
+            }
+
+            const currentKeys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && (k.startsWith('wakil_') || k.startsWith('vetly_'))) currentKeys.push(k);
+            }
+            currentKeys.forEach(k => localStorage.removeItem(k));
+            sbWorkspaceClear();
+            Object.keys(j.data).forEach(k => {
+                if (!(k.startsWith('wakil_') || k.startsWith('vetly_'))) return;
+                if (!wkIsDataKey(k)) localStorage.setItem(k, String(j.data[k]));
+            });
+            sbWorkspaceReplace(workspace);
+            window._sbLastSyncedFingerprint = null;
+            window._sbRestorePending = selectionChanges && !!(importedProject && importedProject.id && importedStory && importedStory.id);
+            setKeys(safeJSON('wakil_keys', { openrouter: '', openai: '', anthropic: '', gemini: '' }));
+            setModels(safeJSON('wakil_models', {}));
+            setLang(getLang());
+            window.applyTheme(localStorage.getItem('vetly_theme'));
+            window.dispatchEvent(new Event('vetly_cloud_selection_changed'));
+            if (window._sbSchedule) window._sbSchedule();
+            setBackupNote(tr('Restored ✔ Changes will sync when a project is open and connected.'));
         } catch (err) {
             alert(tr('Restore failed: {e}', { e: err.message || tr('Invalid file') }));
         }

@@ -28,12 +28,16 @@
         }
     };
 
+    window.applyTheme = function (theme) {
+        root.classList.toggle('dark', theme === 'dark');
+        syncButtons();
+    };
+
     // التبديل الرئيسي: يطبّق الثيم + يحفظ الاختيار
     window.toggleTheme = function () {
         var dark = !isDark();
-        root.classList.toggle('dark', dark);
+        window.applyTheme(dark ? 'dark' : 'light');
         try { localStorage.setItem(STORAGE_KEY, dark ? 'dark' : 'light'); } catch (e) { /* ignore */ }
-        syncButtons();
     };
 
     // تفعيل أي زرار عليه data-theme-toggle — مرة واحدة بـ event delegation
