@@ -778,7 +778,7 @@ function sbQueueSnapshot(projectId, storyOpen, data, baseVersion) {
     };
     try {
         localStorage.setItem(sbPendingSnapshotKey(projectId, storyOpen.id), JSON.stringify(pending));
-        return { error: null, pending: true };
+        return { error: null, pending: true, snapshot: pending };
     } catch (e) {
         return { error: { message: 'Could not queue offline changes in this browser: ' + e.message } };
     }
@@ -793,8 +793,24 @@ async function sbSaveSnapshot(projectId, queuedSnapshot) {
         ? { id: queuedSnapshot.storyId, name: queuedSnapshot.storyName }
         : sbGetOpenStory();
     if (!storyOpen || !storyOpen.id) return { error: null };
+    if (!queuedSnapshot) {
+        let baseVersion = sbSnapshotVersion(projectId);
+        const key = sbPendingSnapshotKey(projectId, storyOpen.id);
+        try {
+            const previousPending = JSON.parse(localStorage.getItem(key) || 'null');
+            if (previousPending && previousPending.projectId === projectId && previousPending.storyId === storyOpen.id) {
+                baseVersion = previousPending.baseVersion;
+            }
+        } catch (e) {
+            return { error: { message: 'Could not read the pending offline changes: ' + e.message } };
+        }
+        const queued = sbQueueSnapshot(projectId, storyOpen, sbWorkspaceDump(), baseVersion);
+        if (queued.error) return queued;
+        queuedSnapshot = queued.snapshot;
+    }
+    const savedFingerprint = _sbFingerprint(queuedSnapshot.data);
     if (navigator.onLine === false) {
-        return sbQueueSnapshot(projectId, storyOpen, queuedSnapshot && queuedSnapshot.data, queuedSnapshot && queuedSnapshot.baseVersion);
+        return { error: null, pending: true, savedFingerprint };
     }
     let snapshotResult;
     try {
@@ -802,14 +818,14 @@ async function sbSaveSnapshot(projectId, queuedSnapshot) {
             .select('payload, updated_at').eq('project_id', projectId).maybeSingle();
     } catch (e) {
         if (/fetch|network|offline|load failed/i.test(String(e.message || '')) || navigator.onLine === false) {
-            return sbQueueSnapshot(projectId, storyOpen, queuedSnapshot && queuedSnapshot.data, queuedSnapshot && queuedSnapshot.baseVersion);
+            return { error: null, pending: true, savedFingerprint };
         }
         return { error: e };
     }
     const { data, error: readError } = snapshotResult;
     if (readError) {
         if (/fetch|network|offline|load failed/i.test(String(readError.message || ''))) {
-            return sbQueueSnapshot(projectId, storyOpen, queuedSnapshot && queuedSnapshot.data, queuedSnapshot && queuedSnapshot.baseVersion);
+            return { error: null, pending: true, savedFingerprint };
         }
         return { error: readError };
     }
@@ -828,10 +844,17 @@ async function sbSaveSnapshot(projectId, queuedSnapshot) {
         pay.stories.push(story);
     }
     if (storyOpen.name) story.name = storyOpen.name;
-    story.data = queuedSnapshot ? queuedSnapshot.data : sbWorkspaceDump();
+    story.data = queuedSnapshot.data;
     story.updated = new Date().toISOString();
     pay.activeStory = story.id;
     const updatedAt = sbNextSnapshotVersion(remoteVersion);
+    if (!window._sbInFlightSnapshotVersions) window._sbInFlightSnapshotVersions = {};
+    window._sbInFlightSnapshotVersions[projectId] = updatedAt;
+    const clearInFlightVersion = () => {
+        if (window._sbInFlightSnapshotVersions[projectId] === updatedAt) {
+            delete window._sbInFlightSnapshotVersions[projectId];
+        }
+    };
     let writeResult;
     try {
         if (remoteVersion) {
@@ -840,6 +863,7 @@ async function sbSaveSnapshot(projectId, queuedSnapshot) {
                 .eq('project_id', projectId).eq('updated_at', remoteVersion)
                 .select('updated_at').maybeSingle();
             if (!writeResult.error && !writeResult.data) {
+                clearInFlightVersion();
                 return { error: { message: 'Cloud data changed while saving. Reload the story to avoid overwriting newer changes.', conflict: true } };
             }
         } else {
@@ -848,19 +872,26 @@ async function sbSaveSnapshot(projectId, queuedSnapshot) {
             }).select('updated_at').maybeSingle();
         }
     } catch (e) {
+        clearInFlightVersion();
         if (/fetch|network|offline|load failed/i.test(String(e.message || '')) || navigator.onLine === false) {
-            return sbQueueSnapshot(projectId, storyOpen, queuedSnapshot && queuedSnapshot.data, queuedSnapshot && queuedSnapshot.baseVersion);
+            return { error: null, pending: true, savedFingerprint };
         }
         return { error: e };
     }
+    clearInFlightVersion();
     if (writeResult.error) {
         if (/fetch|network|offline|load failed/i.test(String(writeResult.error.message || ''))) {
-            return sbQueueSnapshot(projectId, storyOpen, queuedSnapshot && queuedSnapshot.data, queuedSnapshot && queuedSnapshot.baseVersion);
+            return { error: null, pending: true, savedFingerprint };
         }
         return { error: writeResult.error };
     }
     sbSetSnapshotVersion(projectId, writeResult.data && writeResult.data.updated_at || updatedAt);
-    if (!queuedSnapshot) window._sbLastSyncedFingerprint = _sbFingerprint();
+    const openProject = sbGetOpenProject();
+    const openStory = sbGetOpenStory();
+    if (openProject && openProject.id === projectId && openStory && openStory.id === storyOpen.id &&
+        _sbFingerprint() === savedFingerprint) {
+        window._sbLastSyncedFingerprint = savedFingerprint;
+    }
     if (queuedSnapshot) {
         const key = sbPendingSnapshotKey(projectId, storyOpen.id);
         try {
@@ -869,7 +900,7 @@ async function sbSaveSnapshot(projectId, queuedSnapshot) {
         } catch (e) { localStorage.removeItem(key); }
     }
     sbRefreshProjectShares(projectId, pay);
-    return { error: null, pending: false };
+    return { error: null, pending: false, savedFingerprint };
 }
 
 async function sbLoadSnapshot(projectId) {
@@ -962,8 +993,8 @@ function sbWorkspaceHasContent() {
 }
 
 // بصمة الشغل الحالي: أي تغيير في أي مفتاح wakil_ بيغيرها
-function _sbFingerprint() {
-    const dump = sbWorkspaceDump();
+function _sbFingerprint(dump) {
+    dump = dump || sbWorkspaceDump();
     return JSON.stringify(Object.keys(dump).sort().map(k => [k, dump[k]]));
 }
 
@@ -1029,30 +1060,32 @@ function sbStartAutoSave(onStatus) {
         if (!project || !project.id) return;
         const story = sbGetOpenStory();
         if (!story || !story.id) return; // مفيش قصة مفتوحة ⇒ مفيش حفظ (منع القصص الشبح)
-        const user = await sbGetSessionUser();
-        if (!user) return;
         busy = true;
-        if (onStatus) onStatus('saving');
         try {
+            const user = await sbGetSessionUser();
+            if (!user) {
+                lastFp = fp;
+                return;
+            }
+            if (onStatus) onStatus('saving');
             const result = await sbSaveSnapshot(project.id);
             if (result.pending) {
-                lastFp = fp;
+                lastFp = result.savedFingerprint || fp;
                 if (onStatus) onStatus('queued');
             } else if (!result.error) {
-                lastFp = fp;
-                window._sbLastSyncedFingerprint = fp;
+                lastFp = result.savedFingerprint || fp;
                 if (onStatus) onStatus('saved');
             } else {
                 lastFp = fp;
                 if (onStatus) onStatus(result.error.conflict ? 'conflict' : 'error');
             }
         } catch (e) {
-            const result = sbQueueSnapshot(project.id, story, sbWorkspaceDump());
-            if (result.error) {
+            const result = persistPendingWorkspace();
+            if (result && result.error) {
                 lastFp = fp;
                 if (onStatus) onStatus('error');
             } else {
-                lastFp = fp;
+                lastFp = _sbFingerprint();
                 if (onStatus) onStatus('queued');
             }
             console.error('Supabase autosave failed:', e);
@@ -1064,6 +1097,28 @@ function sbStartAutoSave(onStatus) {
         if (timer) clearTimeout(timer);
         timer = setTimeout(flush, 800);
     };
+    const persistPendingWorkspace = () => {
+        if (window._sbSwitching) return;
+        const project = sbGetOpenProject();
+        const story = sbGetOpenStory();
+        if (!project || !project.id || !story || !story.id) return;
+        const fp = _sbFingerprint();
+        if (fp === lastFp || fp === window._sbLastSyncedFingerprint) return;
+        let baseVersion = sbSnapshotVersion(project.id);
+        const inFlightVersion = window._sbInFlightSnapshotVersions && window._sbInFlightSnapshotVersions[project.id];
+        if (inFlightVersion) baseVersion = inFlightVersion;
+        try {
+            const previous = JSON.parse(localStorage.getItem(sbPendingSnapshotKey(project.id, story.id)) || 'null');
+            if (!inFlightVersion && previous && previous.projectId === project.id && previous.storyId === story.id) {
+                baseVersion = previous.baseVersion;
+            }
+        } catch (e) {
+            console.error('Could not read the pending workspace before page exit:', e);
+        }
+        const result = sbQueueSnapshot(project.id, story, sbWorkspaceDump(), baseVersion);
+        if (result.error) console.error('Could not preserve workspace changes before page exit:', result.error);
+    };
+    window.addEventListener('pagehide', persistPendingWorkspace);
     setInterval(() => {
         if (_sbFingerprint() !== lastFp) schedule();
     }, 300);
@@ -1081,14 +1136,6 @@ function sbStartAutoSave(onStatus) {
     });
     window.addEventListener('offline', () => {
         if (onStatus) onStatus('offline');
-    });
-    sbFlushPendingSnapshots().then(result => {
-        if (result.error && onStatus) onStatus(result.error.conflict ? 'conflict' : 'error');
-        else if (result.pending && onStatus) onStatus('queued');
-        if (result.flushed) {
-            lastFp = window._sbLastSyncedFingerprint || '';
-            schedule();
-        }
     });
 }
 

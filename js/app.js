@@ -59,36 +59,92 @@ function App() {
         const storyId = cloudStory.id;
         const pendingKey = sbPendingSnapshotKey(projectId, storyId);
         const readStory = async (isRealtime) => {
-            const result = await sbLoadSnapshot(projectId);
+            const pendingRaw = isRealtime ? null : localStorage.getItem(pendingKey);
+            let result;
+            try {
+                result = await sbLoadSnapshot(projectId);
+            } catch (e) {
+                if (!cancelled) {
+                    setCloudStatus('error');
+                    console.error('Failed to load cloud workspace:', e);
+                }
+                return false;
+            }
             if (cancelled) return;
             if (result.error) {
                 setCloudStatus('error');
                 console.error('Failed to load cloud workspace:', result.error);
-                return;
+                return false;
             }
             const story = result.data.payload.stories.find(item => item.id === storyId);
+            if (!isRealtime) {
+                if (pendingRaw) {
+                    let pending;
+                    try {
+                        pending = JSON.parse(pendingRaw);
+                    } catch (e) {
+                        setCloudStatus('error');
+                        console.error('Failed to read pending local workspace changes:', e);
+                        return false;
+                    }
+                    if (!pending || pending.projectId !== projectId || pending.storyId !== storyId ||
+                        !pending.data || typeof pending.data !== 'object' || Array.isArray(pending.data)) {
+                        setCloudStatus('error');
+                        console.error('Pending local workspace changes are invalid; cloud data was not loaded over them.');
+                        return false;
+                    }
+                    sbWorkspaceReplace(pending.data);
+                    setCloudStatus('queued');
+                    return true;
+                }
+            }
+            if (!story) {
+                setCloudStatus('error');
+                console.error('The active story was not found in the cloud snapshot; local workspace was preserved.');
+                return false;
+            }
             if (isRealtime && window._sbLastSyncedFingerprint && _sbFingerprint() !== window._sbLastSyncedFingerprint) {
                 setCloudStatus('conflict');
                 return;
             }
-            sbWorkspaceReplace(story && story.data ? story.data : {});
+            sbWorkspaceReplace(story.data || {});
             setCloudStatus('saved');
+            return true;
         };
-        readStory(false).then(() => {
-            if (cancelled) return;
+        readStory(false).then(async loaded => {
+            if (cancelled || !loaded) return;
             stopWatching = sbWatchSnapshot(projectId, () => {
-                if (localStorage.getItem(pendingKey) ||
-                    (window._sbLastSyncedFingerprint && _sbFingerprint() !== window._sbLastSyncedFingerprint)) {
+                if (localStorage.getItem(pendingKey)) {
+                    setCloudStatus('queued');
+                    return;
+                }
+                if (window._sbLastSyncedFingerprint && _sbFingerprint() !== window._sbLastSyncedFingerprint) {
                     setCloudStatus('conflict');
                     return;
                 }
                 readStory(true);
             }, status => setCloudStatus(status));
+            const flushResult = await sbFlushPendingSnapshots();
+            if (cancelled) return;
+            if (flushResult.error) setCloudStatus(flushResult.error.conflict ? 'conflict' : 'error');
+            else if (flushResult.pending) setCloudStatus('queued');
+            else setCloudStatus('saved');
         });
         return () => {
             cancelled = true;
             if (stopWatching) stopWatching();
         };
+    }, [cloudUser && cloudUser.id, cloudProject && cloudProject.id, cloudStory && cloudStory.id]);
+
+    useEffect(() => {
+        if (!cloudUser || (cloudProject && cloudProject.id && cloudStory && cloudStory.id)) return;
+        let cancelled = false;
+        sbFlushPendingSnapshots().then(result => {
+            if (cancelled) return;
+            if (result.error) setCloudStatus(result.error.conflict ? 'conflict' : 'error');
+            else if (result.pending) setCloudStatus('queued');
+        });
+        return () => { cancelled = true; };
     }, [cloudUser && cloudUser.id, cloudProject && cloudProject.id, cloudStory && cloudStory.id]);
 
     useEffect(() => {
