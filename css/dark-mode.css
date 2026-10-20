@@ -1,0 +1,136 @@
+/* =====================================================================
+   css/dark-mode.css
+   الدارك مود — ملف مستقل، مفيش أي تعديل في ملفات المشروع الأصلية.
+   كل القواعد هنا بتشتغل بس لما الـ <html> ياخد كلاس "dark"
+   (الكلاس ده بيتضاف ويتشال من js/core/theme.js).
+
+   ⛔ استثناء صفحة Vetly Agent: الأيجنت داكن بالأساس (بايتي فولت خاص بيه)،
+   وقواعد الدارك مود كانت بتكسر تدرج ألوانه (البانلات أفتح من الأزرار والحدود
+   أغمق من الخلفيات). فكل القواعد جوه الصفحة دي متثنى بـ
+   :not(.agent-page, .agent-page *) — الكلاس agent-page على <main> بتاع الأيجنت.
+   ===================================================================== */
+
+/* ---------- 1) الخلفيات الأساسية ---------- */
+html.dark body            { background-color: #0b1120; color: #e2e8f0; }  /* النص الافتراضي فاتح: أي عنصر بيورّث الأسود بيبقى مقروء */
+html.dark .bg-slate-50:not(.agent-page, .agent-page *)    { background-color: #0b1120; }  /* خلفية الصفحة */
+html.dark .bg-white:not(.agent-page, .agent-page *)       { background-color: #1e293b; }  /* الكروت والبانلات */
+html.dark .bg-slate-100:not(.agent-page, .agent-page *)   { background-color: #263548; }
+html.dark .bg-slate-200:not(.agent-page, .agent-page *)   { background-color: #334155; }
+html.dark .bg-slate-800:not(.agent-page, .agent-page *)   { background-color: #334155; }  /* هيدر الجدول */
+
+/* حالات الـ hover (سامبل/أزرار) */
+html.dark .hover\:bg-slate-100:hover:not(.agent-page, .agent-page *)      { background-color: #263548; }
+html.dark .hover\:bg-slate-300:hover:not(.agent-page, .agent-page *)      { background-color: #334155; }
+html.dark .hover\:text-slate-800:hover:not(.agent-page, .agent-page *)    { color: #e2e8f0; }
+html.dark .hover\:bg-red-100:hover:not(.agent-page, .agent-page *)        { background-color: rgba(239, 68, 68, 0.15); }
+
+/* ---------- 2) الألوان الفاتحة (تنت/شارات/حالة نشطة) ---------- */
+html.dark .bg-blue-50:not(.agent-page, .agent-page *)       { background-color: rgba(59, 130, 246, 0.14); }
+html.dark .bg-blue-50\/50:not(.agent-page, .agent-page *)   { background-color: rgba(59, 130, 246, 0.08); }
+html.dark .bg-red-50:not(.agent-page, .agent-page *)        { background-color: rgba(239, 68, 68, 0.12); }
+html.dark .bg-red-100:not(.agent-page, .agent-page *)       { background-color: rgba(239, 68, 68, 0.18); }
+html.dark .bg-green-50:not(.agent-page, .agent-page *)      { background-color: rgba(34, 197, 94, 0.12); }
+html.dark .bg-emerald-50:not(.agent-page, .agent-page *)    { background-color: rgba(16, 185, 129, 0.12); }
+html.dark .bg-amber-50:not(.agent-page, .agent-page *)      { background-color: rgba(245, 158, 11, 0.12); }
+html.dark .bg-amber-50\/50:not(.agent-page, .agent-page *)  { background-color: rgba(245, 158, 11, 0.07); }
+html.dark .bg-indigo-50:not(.agent-page, .agent-page *)     { background-color: rgba(99, 102, 241, 0.12); }
+
+/* ---------- 3) الحدود ---------- */
+html.dark .border-slate-100:not(.agent-page, .agent-page *)   { border-color: #263548; }
+html.dark .border-slate-200:not(.agent-page, .agent-page *)   { border-color: #334155; }
+html.dark .border-slate-300:not(.agent-page, .agent-page *)   { border-color: #475569; }
+html.dark .border-blue-100:not(.agent-page, .agent-page *)    { border-color: rgba(59, 130, 246, 0.25); }
+html.dark .border-blue-200:not(.agent-page, .agent-page *)    { border-color: rgba(59, 130, 246, 0.35); }
+html.dark .border-red-100:not(.agent-page, .agent-page *)     { border-color: rgba(239, 68, 68, 0.25); }
+html.dark .border-red-200:not(.agent-page, .agent-page *)     { border-color: rgba(239, 68, 68, 0.35); }
+html.dark .border-green-200:not(.agent-page, .agent-page *)   { border-color: rgba(34, 197, 94, 0.35); }
+html.dark .border-emerald-200:not(.agent-page, .agent-page *) { border-color: rgba(16, 185, 129, 0.35); }
+html.dark .border-amber-200:not(.agent-page, .agent-page *)   { border-color: rgba(245, 158, 11, 0.35); }
+html.dark .border-indigo-200:not(.agent-page, .agent-page *)  { border-color: rgba(99, 102, 241, 0.35); }
+
+/* ---------- 4) ألوان النصوص ---------- */
+html.dark .text-slate-800:not(.agent-page, .agent-page *) { color: #e2e8f0; }
+html.dark .text-slate-700:not(.agent-page, .agent-page *) { color: #cbd5e1; }
+html.dark .text-slate-600:not(.agent-page, .agent-page *) { color: #94a3b8; }
+html.dark .text-slate-500:not(.agent-page, .agent-page *) { color: #94a3b8; }
+html.dark .text-slate-400:not(.agent-page, .agent-page *) { color: #7d8aa0; }
+html.dark .text-slate-300:not(.agent-page, .agent-page *) { color: #94a3b8; }
+
+/* نصوص ملوّنة — نسخ أفتح للقراءة على الخلفية الغامقة */
+html.dark .text-blue-600:not(.agent-page, .agent-page *)    { color: #60a5fa; }
+html.dark .text-blue-700:not(.agent-page, .agent-page *)    { color: #93c5fd; }
+html.dark .text-blue-800:not(.agent-page, .agent-page *)    { color: #93c5fd; }
+html.dark .text-red-500:not(.agent-page, .agent-page *)     { color: #f87171; }
+html.dark .text-red-600:not(.agent-page, .agent-page *)     { color: #f87171; }
+html.dark .text-red-700:not(.agent-page, .agent-page *)     { color: #fca5a5; }
+html.dark .text-emerald-700:not(.agent-page, .agent-page *) { color: #6ee7b7; }
+html.dark .text-green-700:not(.agent-page, .agent-page *)   { color: #86efac; }
+html.dark .text-amber-700:not(.agent-page, .agent-page *)   { color: #fcd34d; }
+html.dark .text-indigo-700:not(.agent-page, .agent-page *)  { color: #a5b4fc; }
+
+/* ---------- 5) حقول الإدخال (مش عليها كلاس bg فمحتاجين سطر صريح) ---------- */
+html.dark input:not([type="checkbox"]):not([type="radio"]):not(.agent-page, .agent-page *),
+html.dark textarea:not(.agent-page, .agent-page *),
+html.dark select:not(.agent-page, .agent-page *) {
+    background-color: #0f172a;
+    color: #e2e8f0;
+}
+html.dark :not(.agent-page, .agent-page *)::placeholder { color: #64748b; }
+
+/* ---------- 6) تفاصيل إضافية ---------- */
+html.dark ::-webkit-scrollbar-thumb { background: #475569; }
+html.dark .bg-black\/40:not(.agent-page, .agent-page *)            { background-color: rgba(2, 6, 23, 0.65); }  /* خلفية المودال */
+
+/* زرار اختيار الملف (file input) */
+html.dark .file\:bg-blue-50:not(.agent-page, .agent-page *)::file-selector-button             { background-color: rgba(59, 130, 246, 0.15); }
+html.dark .hover\:file\:bg-blue-100:not(.agent-page, .agent-page *):hover::file-selector-button { background-color: rgba(59, 130, 246, 0.25); }
+html.dark .file\:text-blue-700:not(.agent-page, .agent-page *)::file-selector-button          { color: #93c5fd; }
+
+/* ---------- 7) بادجات وتابات وشرائح: نسخ متناسقة مع الكحلي ---------- */
+html.dark .bg-slate-300:not(.agent-page, .agent-page *)      { background-color: #475569; }
+html.dark .bg-slate-600:not(.agent-page, .agent-page *)      { background-color: #263548; }
+html.dark .bg-slate-700:not(.agent-page, .agent-page *)      { background-color: #1e293b; }
+html.dark .bg-slate-900:not(.agent-page, .agent-page *)      { background-color: #0f172a; }
+html.dark .bg-slate-800\/80:not(.agent-page, .agent-page *)  { background-color: rgba(30, 41, 59, 0.85); }
+html.dark .bg-slate-50\/60:not(.agent-page, .agent-page *)   { background-color: rgba(15, 23, 42, 0.55); }
+html.dark .bg-slate-50\/50:not(.agent-page, .agent-page *)   { background-color: rgba(15, 23, 42, 0.5); }
+html.dark .bg-blue-100:not(.agent-page, .agent-page *)       { background-color: rgba(59, 130, 246, 0.18); }
+html.dark .bg-blue-500\/10:not(.agent-page, .agent-page *)   { background-color: rgba(59, 130, 246, 0.12); }
+html.dark .bg-blue-500\/20:not(.agent-page, .agent-page *)   { background-color: rgba(59, 130, 246, 0.2); }
+html.dark .bg-green-100:not(.agent-page, .agent-page *)      { background-color: rgba(34, 197, 94, 0.16); }
+html.dark .bg-emerald-100:not(.agent-page, .agent-page *)    { background-color: rgba(16, 185, 129, 0.16); }
+html.dark .bg-amber-100:not(.agent-page, .agent-page *)      { background-color: rgba(245, 158, 11, 0.16); }
+html.dark .bg-orange-50:not(.agent-page, .agent-page *)      { background-color: rgba(249, 115, 22, 0.12); }
+html.dark .bg-orange-100:not(.agent-page, .agent-page *)     { background-color: rgba(249, 115, 22, 0.16); }
+
+/* ---------- 8) حدود ناقصة ---------- */
+html.dark .border-slate-600:not(.agent-page, .agent-page *)   { border-color: #334155; }
+html.dark .border-slate-700:not(.agent-page, .agent-page *)   { border-color: #263548; }
+html.dark .border-blue-300:not(.agent-page, .agent-page *)    { border-color: rgba(59, 130, 246, 0.45); }
+html.dark .border-green-100:not(.agent-page, .agent-page *)   { border-color: rgba(34, 197, 94, 0.25); }
+html.dark .border-emerald-100:not(.agent-page, .agent-page *) { border-color: rgba(16, 185, 129, 0.25); }
+html.dark .border-amber-100:not(.agent-page, .agent-page *)   { border-color: rgba(245, 158, 11, 0.25); }
+html.dark .border-orange-200:not(.agent-page, .agent-page *)  { border-color: rgba(249, 115, 22, 0.35); }
+
+/* ---------- 9) نصوص كانت غامقة على غامق ---------- */
+html.dark .text-slate-900:not(.agent-page, .agent-page *)    { color: #e2e8f0; }
+html.dark .text-slate-200:not(.agent-page, .agent-page *)    { color: #cbd5e1; }
+html.dark .text-blue-400:not(.agent-page, .agent-page *)     { color: #93c5fd; }
+html.dark .text-blue-500:not(.agent-page, .agent-page *)     { color: #60a5fa; }
+html.dark .text-green-500:not(.agent-page, .agent-page *)    { color: #86efac; }
+html.dark .text-green-600:not(.agent-page, .agent-page *)    { color: #86efac; }
+html.dark .text-emerald-600:not(.agent-page, .agent-page *)  { color: #6ee7b7; }
+html.dark .text-emerald-800:not(.agent-page, .agent-page *)  { color: #6ee7b7; }
+html.dark .text-amber-600:not(.agent-page, .agent-page *)    { color: #fbbf24; }
+html.dark .text-amber-800:not(.agent-page, .agent-page *)    { color: #fcd34d; }
+html.dark .text-orange-700:not(.agent-page, .agent-page *)   { color: #fdba74; }
+html.dark .text-red-800:not(.agent-page, .agent-page *)      { color: #fca5a5; }
+html.dark .text-red-400:not(.agent-page, .agent-page *)      { color: #f87171; }
+html.dark .text-indigo-400:not(.agent-page, .agent-page *)   { color: #a5b4fc; }
+
+/* ---------- 10) hover ناقصة ---------- */
+html.dark .hover\:bg-slate-200:hover:not(.agent-page, .agent-page *) { background-color: #334155; }
+html.dark .hover\:bg-slate-600:hover:not(.agent-page, .agent-page *) { background-color: #334155; }
+html.dark .hover\:bg-slate-700:hover:not(.agent-page, .agent-page *) { background-color: #263548; }
+/* صفحات الشير (أكورديون الفيتشرز): هوفر أبيض على نص أبيض كان بيحصل هنا */
+html.dark .hover\:bg-slate-50:hover:not(.agent-page, .agent-page *) { background-color: #263548; }
